@@ -1,9 +1,14 @@
 from pyramid.httpexceptions import HTTPFound
 from pyramid.response import Response
 from pyramid.view import view_config
-import pycurl
+#import pycurl
 import json
 import pyorient
+#from datetime import datetime
+from elasticsearch import Elasticsearch
+from elasticsearch_dsl import Search, Q
+from swalign_doc import swalign_doc
+
 
 try:
     from io import BytesIO
@@ -13,7 +18,7 @@ except ImportError:
 class TutorialViews:
     def __init__(self, request):
         self.request = request
-
+'''
     def get_db_client(self):
         db_name = "ElasticLogs"
         client = pyorient.OrientDB("localhost", 2424)
@@ -47,42 +52,67 @@ class TutorialViews:
         return docs
 
 
+
     def scoring_function(self, pairs):
-        for pair in pairs:
-            doc1=pair["doc1"]
-            doc2=pair["doc2"]
-            buffer = BytesIO()
-            c = pycurl.Curl();
-            url="http://localhost:9200/hello_world_example/_search?q=_id:"+doc1
-            c.setopt(pycurl.URL, url)
-            c.setopt(c.WRITEFUNCTION, buffer.write)
-            c.perform()
+        #for pair in pairs:
+        pair=pairs[0]
+        doc1=pair["doc1"]
+        doc2=pair["doc2"]
+        client = Elasticsearch()
+        s = Search(using=client, index="hello_world_example").query("match", _id=doc1)
+        response=s.execute()
+        search_text=response[0]["text"]
+        #search_text=response["hits"]["hits"][0]["_source"]["text"]
+        #print(search_text)
 
-            body = buffer.getvalue()
-            id_hit=json.loads(body)
-            search_text=id_hit["hits"]["hits"][0]["_source"]["text"]
+        #Second request to elastic to get score
+        s = Search(using=client, index="hello_world_example").query("match", text=search_text)
+        response=s.execute()
+        for hit in response:
+            #print(hit.meta.score, hit.text)
+            #print(match)
+            #search_text=match["text"]
+            print(match["text"], match["_score"])
+        #self.log_scores(pairs)
+'''
+    #call elastic search for candidate docs
+    def find_candidate_documents(self, search_doc):
+        #print(search_doc)
+        client = Elasticsearch()
+        s = Search(using=client, index="hello_world_example").query("match", text=search_doc)
+        response=s.execute()
 
-            #Second request to elastic to get score
-            data_object={"query" : {"filtered" : {"filter" : {"match" : {"_id" : doc2}},"query" : {"match" : {"text" : search_text}}}}}
-            data=json.dumps(data_object)
+        new_response=[]
+        for hit in response:
+            #print(hit.meta.id,hit.meta.score, hit.text)
+            new_response.append({"id":hit.meta.id, "score":hit.meta.score, "text": hit.text})
+        return new_response
 
-            buffer = BytesIO()
-            second_url="http://localhost:9200/hello_world_example/_search"
-            c=pycurl.Curl()
-            c.setopt(pycurl.URL, second_url)
-            c.setopt(pycurl.POSTFIELDS, data)
-            c.setopt(c.WRITEFUNCTION, buffer.write)
-            c.perform()
-            c.close()
-            body = buffer.getvalue()
-            #print(body)
-            text_hit=json.loads(body)
-            if text_hit["hits"]["total"] == 0:
-                pair["score"]=0
-            else:
-                pair["score"]=text_hit["hits"]["hits"][0]["_score"]
-        self.log_scores(pairs)
+    #min-max normalization of bm25 scores
+    def normalize_score(self, candidate_docs):
+        max_score=candidate_docs[0]["score"]
+        min_score=candidate_docs[-1]["score"]
+        for hit in candidate_docs:
+            hit["score"] = (hit["score"] - min_score)/(max_score - min_score)
+        #print(candidate_docs)
 
+    #apply smith-watterman on documents
+    def get_alignment_score(self, search_doc, candidate_docs):
+        sd= swalign_doc()
+        max_alignment_score=sd.get_alignment_score(search_doc, search_doc)
+        min_alignment_score= 0;
+        for hit in candidate_docs:
+            hit["sw_score"]=sd.get_alignment_score(search_doc, hit["text"])
+            #normalize allignment scores
+            hit["sw_score"]=(hit["sw_score"] - min_alignment_score)/(max_alignment_score- min_alignment_score)
+        #print(candidate_docs)
+
+    #take weighted average bm25 and sw scores
+    def get_final_scores(self, candidate_docs):
+        for hit  in candidate_docs:
+            hit["_score"] = (0.5 * hit["score"]) + (0.5 * hit["sw_score"])
+            del hit["score"]
+            del hit["sw_score"]
 
     @view_config(route_name='home')
     def home(self):
@@ -101,9 +131,15 @@ class TutorialViews:
 
     @view_config(route_name='score')
     def score(self):
-        pairs=self.get_pairs()
-        self.scoring_function(pairs)
+        request_body=self.request.json_body
+        search_text= request_body["search_text"]
+        candidate_docs= self.find_candidate_documents(search_text)
+        self.normalize_score(candidate_docs)
+        self.get_alignment_score(search_text, candidate_docs)
+        self.get_final_scores(candidate_docs)
+        body= json.dumps(candidate_docs)
+        #print(candidate_docs)
         return Response(
             content_type='text/plain',
-            body="Hello scorer \n"
+            body=body
         )

@@ -3,7 +3,12 @@ from setuptools import setup
 requires = [
     'pyramid',
     'pyramid_chameleon',
-    'pyorient'
+    'pyorient',
+    'elasticsearch',
+    'elasticsearch-dsl',
+    'regex',
+    'nltk',
+    'numpy'
 ]
 
 setup(name='tutorial',
