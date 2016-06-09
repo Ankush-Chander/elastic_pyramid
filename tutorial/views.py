@@ -18,7 +18,7 @@ except ImportError:
 class TutorialViews:
     def __init__(self, request):
         self.request = request
-'''
+    '''    
     def get_db_client(self):
         db_name = "ElasticLogs"
         client = pyorient.OrientDB("localhost", 2424)
@@ -74,7 +74,7 @@ class TutorialViews:
             #search_text=match["text"]
             print(match["text"], match["_score"])
         #self.log_scores(pairs)
-'''
+    '''
     #call elastic search for candidate docs
     def find_candidate_documents(self, search_doc):
         #print(search_doc)
@@ -113,6 +113,7 @@ class TutorialViews:
             hit["_score"] = (0.5 * hit["score"]) + (0.5 * hit["sw_score"])
             del hit["score"]
             del hit["sw_score"]
+        candidate_docs.sort(key=lambda x: x["_score"], reverse=True)
 
     @view_config(route_name='home')
     def home(self):
